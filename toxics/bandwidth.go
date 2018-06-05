@@ -43,7 +43,7 @@ func (t *BandwidthToxic) Pipe(stub *ToxicStub) {
 			start := time.Now()
 			select {
 			case <-time.After(sleep):
-				// time.After only seems to have ~1ms prevision, so offset the next sleep by the error
+				// time.After only seems to have ~1ms precision, so offset the next sleep by the error
 				sleep -= time.Since(start)
 				stub.Output <- p
 			case <-stub.Interrupt:

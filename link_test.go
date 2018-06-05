@@ -17,7 +17,7 @@ func TestToxicsAreLoaded(t *testing.T) {
 	}
 }
 
-func TestStubInitializaation(t *testing.T) {
+func TestStubInitialization(t *testing.T) {
 	collection := NewToxicCollection(nil)
 	link := NewToxicLink(nil, collection, stream.Downstream)
 	if len(link.stubs) != 1 {
@@ -31,7 +31,7 @@ func TestStubInitializaation(t *testing.T) {
 	}
 }
 
-func TestStubInitializaationWithToxics(t *testing.T) {
+func TestStubInitializationWithToxics(t *testing.T) {
 	collection := NewToxicCollection(nil)
 	collection.chainAddToxic(&toxics.ToxicWrapper{
 		Toxic:      new(toxics.LatencyToxic),
@@ -101,6 +101,74 @@ func TestAddRemoveStubs(t *testing.T) {
 		if cap(link.stubs[i].Input) != toxic.BufferSize {
 			t.Fatalf("%s buffer was not initialized as %d: %d", toxic.Type, toxic.BufferSize, cap(link.stubs[i].Input))
 		}
+	}
+}
+
+func TestRemoveStubWaitingForData(t *testing.T) {
+	collection := NewToxicCollection(nil)
+	link := NewToxicLink(nil, collection, stream.Downstream)
+	go link.stubs[0].Run(collection.chain[stream.Downstream][0])
+	collection.links["test"] = link
+
+	// Add stubs
+	collection.chainAddToxic(&toxics.ToxicWrapper{
+		Toxic:      new(toxics.LatencyToxic),
+		Type:       "latency",
+		Direction:  stream.Downstream,
+		BufferSize: 1024,
+		Toxicity:   1,
+	})
+	toxic := &toxics.ToxicWrapper{
+		Toxic:      &toxics.TimeoutToxic{Timeout: 0},
+		Type:       "timeout",
+		Direction:  stream.Downstream,
+		BufferSize: 0,
+		Toxicity:   1,
+	}
+	collection.chainAddToxic(toxic)
+	collection.chainAddToxic(&toxics.ToxicWrapper{
+		Toxic:      new(toxics.LatencyToxic),
+		Type:       "latency",
+		Direction:  stream.Downstream,
+		BufferSize: 1024,
+		Toxicity:   1,
+	})
+
+	buf := make([]byte, 2)
+	for i := 0; i < 512; i++ {
+		binary.BigEndian.PutUint16(buf, uint16(i))
+		link.input.Write(buf)
+	}
+	link.input.Close()
+
+	// Make sure no data has made it through yet.
+	interrupt := make(chan struct{})
+	link.output.SetInterrupt(interrupt)
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		interrupt <- struct{}{}
+	}()
+	n, err := link.output.Read(buf)
+	if n != 0 || err != stream.ErrInterrupted {
+		t.Fatalf("Expected no data: %d %v", n, err)
+	}
+
+	// Make sure this doesn't hang, and the data is all there
+	collection.chainRemoveToxic(toxic)
+	for i := 0; i < 512; i++ {
+		n, err := link.output.Read(buf)
+		if n != 2 || err != nil {
+			t.Fatalf("Read failed: %d %v", n, err)
+		} else {
+			val := binary.BigEndian.Uint16(buf)
+			if val != uint16(i) {
+				t.Fatalf("Read incorrect bytes: %v != %d", val, i)
+			}
+		}
+	}
+	n, err = link.output.Read(buf)
+	if n != 0 || err != io.EOF {
+		t.Fatalf("Expected EOF: %d %v", n, err)
 	}
 }
 
